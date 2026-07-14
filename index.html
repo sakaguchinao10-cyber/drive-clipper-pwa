@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DriveClipper">
+<meta name="theme-color" content="#1a1a2e">
+<title>DriveClipper</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon192.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#1a1a2e;--card:#2a2a4a;--card-hover:#3a3a5a;--primary:#4285f4;--primary-hover:#3367d6;--green:#4caf50;--red:#f44336;--yellow:#ffc107;--text:#e0e0e0;--text-sub:#888;--border:#444}
+body{font-family:-apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
+.container{max-width:480px;width:100%;margin:0 auto;padding:16px;flex:1;display:flex;flex-direction:column}
+
+/* ヘッダー */
+.header{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:16px}
+.logo{font-size:18px;font-weight:700}
+.btn-link{background:none;border:none;color:var(--text-sub);font-size:13px;cursor:pointer;padding:4px 8px}
+.btn-link:hover{color:var(--red)}
+.user-info{font-size:11px;color:var(--text-sub)}
+
+/* ボタン */
+.btn{display:block;width:100%;padding:14px 16px;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:8px;transition:all .15s;text-align:left;-webkit-tap-highlight-color:transparent}
+.btn.primary{background:var(--primary);color:#fff;text-align:center}
+.btn.primary:hover,.btn.primary:active{background:var(--primary-hover)}
+.btn.clip{background:var(--card);color:var(--text)}
+.btn.clip:hover,.btn.clip:active{background:var(--card-hover)}
+.btn:disabled{opacity:.5;pointer-events:none}
+
+/* 入力エリア */
+.input-section{margin-bottom:12px}
+.input-section label{display:block;font-size:12px;color:var(--text-sub);margin-bottom:4px}
+.input-section input,.input-section textarea{width:100%;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:14px;resize:vertical}
+.input-section textarea{min-height:100px}
+.input-section input:focus,.input-section textarea:focus{outline:none;border-color:var(--primary)}
+
+/* ステータス */
+.status{font-size:13px;text-align:center;padding:8px;min-height:20px;border-radius:8px;margin-top:8px}
+.status.ok{color:var(--green);background:rgba(76,175,80,.1)}
+.status.err{color:var(--red);background:rgba(244,67,54,.1)}
+.status.busy{color:var(--yellow);background:rgba(255,193,7,.1)}
+
+/* ログイン画面 */
+.login-view{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:40px 20px}
+.login-view .logo{font-size:28px;margin-bottom:8px}
+.login-view .sub{color:var(--text-sub);margin-bottom:32px;font-size:14px}
+
+/* クリップ一覧 */
+.clips-section{margin-top:16px;border-top:1px solid var(--border);padding-top:12px}
+.clips-section h3{font-size:13px;color:var(--text-sub);margin-bottom:8px}
+.clip-item{background:var(--card);border-radius:8px;padding:10px 12px;margin-bottom:6px;font-size:13px}
+.clip-item .title{font-weight:600;margin-bottom:2px}
+.clip-item .meta{font-size:11px;color:var(--text-sub)}
+
+/* タブ */
+.tabs{display:flex;gap:4px;margin-bottom:16px}
+.tab{flex:1;padding:10px;border:none;border-radius:8px;background:var(--card);color:var(--text-sub);font-size:13px;font-weight:600;cursor:pointer;text-align:center;transition:all .15s}
+.tab.active{background:var(--primary);color:#fff}
+
+/* 共有ターゲット受信 */
+.share-preview{background:var(--card);border-radius:8px;padding:12px;margin-bottom:12px;font-size:13px;word-break:break-all}
+.share-preview .label{font-size:11px;color:var(--text-sub);margin-bottom:4px}
+
+/* PWAインストールバナー */
+.install-banner{background:var(--card);border-radius:10px;padding:12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;font-size:13px}
+.install-banner button{background:var(--primary);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+
+<!-- ログイン画面 -->
+<div id="view-login" class="login-view">
+  <div class="logo">📎 DriveClipper</div>
+  <p class="sub">WebページをGoogle Driveに保存</p>
+  <button id="btn-login" class="btn primary" style="max-width:280px">Googleアカウントに接続</button>
+</div>
+
+<!-- メイン画面 -->
+<div id="view-main" class="container hide">
+  <div class="header">
+    <span class="logo">📎 DriveClipper</span>
+    <div style="text-align:right">
+      <div id="user-email" class="user-info"></div>
+      <button id="btn-logout" class="btn-link">切断</button>
+    </div>
+  </div>
+
+  <!-- 共有受信プレビュー -->
+  <div id="share-preview" class="share-preview hide">
+    <div class="label">共有から受信:</div>
+    <div id="share-content"></div>
+  </div>
+
+  <!-- タブ -->
+  <div class="tabs">
+    <button class="tab active" data-tab="clip">クリップ</button>
+    <button class="tab" data-tab="memo">メモ</button>
+  </div>
+
+  <!-- クリップタブ -->
+  <div id="tab-clip">
+    <div class="input-section">
+      <label>URL</label>
+      <input type="url" id="clip-url" placeholder="https://...">
+    </div>
+    <div class="input-section">
+      <label>タイトル（任意）</label>
+      <input type="text" id="clip-title" placeholder="自動取得もOK">
+    </div>
+    <div class="input-section">
+      <label>コメント（任意）</label>
+      <textarea id="clip-comment" rows="3" placeholder="メモやコメントを追加..."></textarea>
+    </div>
+    <button id="btn-clip" class="btn primary">📎 クリップを保存</button>
+  </div>
+
+  <!-- メモタブ -->
+  <div id="tab-memo" class="hide">
+    <div class="input-section">
+      <label>メモ</label>
+      <textarea id="memo-text" rows="6" placeholder="メモを入力..."></textarea>
+    </div>
+    <button id="btn-memo" class="btn primary">💬 メモを保存</button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <!-- 最近のクリップ -->
+  <div class="clips-section">
+    <h3>最近の保存 <button id="btn-refresh" class="btn-link" style="font-size:11px">🔄</button></h3>
+    <div id="clips-list"></div>
+  </div>
+</div>
+
+<script>
+// ===== 設定 =====
+const CONFIG = {
+  CLIENT_ID: '548818324610-44ncv651psd7j0i7epflh4avouve56dk.apps.googleusercontent.com',
+  SCOPES: 'https://www.googleapis.com/auth/drive.file',
+  ROOT_FOLDER: 'WebClips',
+};
+
+// ===== 状態 =====
+let accessToken = null;
+let tokenClient = null;
+
+// ===== DOM =====
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+// ===== ステータス表示 =====
+function showStatus(msg, cls) {
+  const el = $('#status');
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+  if (cls === 'ok') setTimeout(() => { el.textContent = ''; el.className = 'status'; }, 3000);
+}
+
+// ===== Google Identity Services 初期化 =====
+function initGIS() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CONFIG.CLIENT_ID,
+    scope: CONFIG.SCOPES,
+    callback: (resp) => {
+      if (resp.error) {
+        showStatus('認証に失敗しました', 'err');
+        return;
+      }
+      accessToken = resp.access_token;
+      localStorage.setItem('dc_token', accessToken);
+      onLoggedIn();
+    },
+  });
+}
+
+function onLoggedIn() {
+  $('#view-login').classList.add('hide');
+  $('#view-main').classList.remove('hide');
+  // ユーザー情報取得
+  fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  }).then(r => r.json()).then(u => {
+    $('#user-email').textContent = u.email || '';
+  }).catch(() => {});
+  loadRecentClips();
+}
+
+// ===== ログイン/ログアウト =====
+$('#btn-login').addEventListener('click', () => {
+  if (tokenClient) tokenClient.requestAccessToken();
+});
+
+$('#btn-logout').addEventListener('click', () => {
+  accessToken = null;
+  localStorage.removeItem('dc_token');
+  google.accounts.oauth2.revoke(accessToken || '', () => {});
+  $('#view-main').classList.add('hide');
+  $('#view-login').classList.remove('hide');
+});
+
+// ===== タブ切替 =====
+$$('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    $$('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const target = tab.dataset.tab;
+    $('#tab-clip').classList.toggle('hide', target !== 'clip');
+    $('#tab-memo').classList.toggle('hide', target !== 'memo');
+  });
+});
+
+// ===== Drive API =====
+async function driveRequest(url, opts = {}) {
+  const res = await fetch(url, {
+    ...opts,
+    headers: { Authorization: `Bearer ${accessToken}`, ...(opts.headers || {}) },
+  });
+  if (res.status === 401) {
+    // トークン切れ → 再認証
+    accessToken = null;
+    localStorage.removeItem('dc_token');
+    tokenClient.requestAccessToken();
+    throw new Error('トークン切れ: 再ログインしてください');
+  }
+  if (!res.ok) throw new Error(`API Error: ${res.status}`);
+  return res;
+}
+
+async function ensureFolder(name, parentId) {
+  let q = `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  if (parentId) q += ` and '${parentId}' in parents`;
+  const res = await driveRequest(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive`
+  );
+  const data = await res.json();
+  if (data.files?.length > 0) return data.files[0].id;
+  const meta = { name, mimeType: 'application/vnd.google-apps.folder' };
+  if (parentId) meta.parents = [parentId];
+  const cr = await driveRequest('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(meta),
+  });
+  return (await cr.json()).id;
+}
+
+async function getMonthFolder() {
+  const rootId = await ensureFolder(CONFIG.ROOT_FOLDER, null);
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return ensureFolder(ym, rootId);
+}
+
+async function uploadMarkdown(fileName, content) {
+  const folderId = await getMonthFolder();
+  const metadata = { name: fileName, parents: [folderId] };
+  const boundary = '---DCBoundary';
+  const body = [
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+    `--${boundary}\r\nContent-Type: text/markdown; charset=UTF-8\r\n\r\n${content}\r\n`,
+    `--${boundary}--`
+  ].join('');
+  await driveRequest('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+}
+
+// ===== クリップ保存 =====
+$('#btn-clip').addEventListener('click', async () => {
+  const url = $('#clip-url').value.trim();
+  if (!url) { showStatus('URLを入力してください', 'err'); return; }
+
+  const title = $('#clip-title').value.trim() || url;
+  const comment = $('#clip-comment').value.trim();
+  const now = new Date();
+  const ts = now.toISOString();
+  const dateSlug = ts.slice(0, 10);
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+
+  const md = [
+    '---',
+    `title: "${safeTitle}"`,
+    `source: ${url}`,
+    `clipped: ${ts}`,
+    '---',
+    '',
+    comment ? comment + '\n' : '',
+    `[元記事](${url})`,
+  ].join('\n');
+
+  showStatus('保存中...', 'busy');
+  $('#btn-clip').disabled = true;
+  try {
+    await uploadMarkdown(`${dateSlug}_${safeTitle}.md`, md);
+    showStatus('保存しました ✓', 'ok');
+    $('#clip-url').value = '';
+    $('#clip-title').value = '';
+    $('#clip-comment').value = '';
+    loadRecentClips();
+  } catch (e) {
+    showStatus(e.message, 'err');
+  }
+  $('#btn-clip').disabled = false;
+});
+
+// ===== メモ保存 =====
+$('#btn-memo').addEventListener('click', async () => {
+  const text = $('#memo-text').value.trim();
+  if (!text) { showStatus('メモを入力してください', 'err'); return; }
+
+  const now = new Date();
+  const ts = now.toISOString();
+  const dateSlug = ts.slice(0, 10);
+  const timeSlug = ts.slice(11, 16).replace(':', '');
+
+  const md = [
+    '---',
+    `title: "メモ"`,
+    `clipped: ${ts}`,
+    '---',
+    '',
+    text,
+  ].join('\n');
+
+  showStatus('保存中...', 'busy');
+  $('#btn-memo').disabled = true;
+  try {
+    await uploadMarkdown(`${dateSlug}_${timeSlug}_memo.md`, md);
+    showStatus('保存しました ✓', 'ok');
+    $('#memo-text').value = '';
+    loadRecentClips();
+  } catch (e) {
+    showStatus(e.message, 'err');
+  }
+  $('#btn-memo').disabled = false;
+});
+
+// ===== 最近のクリップ一覧 =====
+async function loadRecentClips() {
+  const list = $('#clips-list');
+  try {
+    let q = `mimeType!='application/vnd.google-apps.folder' and trashed=false`;
+    // WebClipsフォルダ内を検索
+    const rootQ = `name='${CONFIG.ROOT_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    const rootRes = await driveRequest(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(rootQ)}&fields=files(id)&spaces=drive`
+    );
+    const rootData = await rootRes.json();
+    if (!rootData.files?.length) { list.innerHTML = '<div class="clip-item"><div class="meta">まだクリップがありません</div></div>'; return; }
+
+    // 最近のファイル10件
+    const res = await driveRequest(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${rootData.files[0].id}' in parents or trashed=false`)}&orderBy=createdTime desc&pageSize=10&fields=files(id,name,createdTime,webViewLink)&spaces=drive`
+    );
+    const data = await res.json();
+
+    // WebClips配下の月フォルダからファイルを取得
+    const monthFolders = data.files?.filter(f => f.name?.match(/^\d{4}-\d{2}$/)) || [];
+    let allFiles = [];
+    for (const mf of monthFolders.slice(0, 3)) {
+      const fRes = await driveRequest(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${mf.id}' in parents and trashed=false`)}&orderBy=createdTime desc&pageSize=5&fields=files(id,name,createdTime,webViewLink)&spaces=drive`
+      );
+      const fData = await fRes.json();
+      if (fData.files) allFiles = allFiles.concat(fData.files);
+    }
+    allFiles.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+
+    if (!allFiles.length) {
+      list.innerHTML = '<div class="clip-item"><div class="meta">まだクリップがありません</div></div>';
+      return;
+    }
+    list.innerHTML = allFiles.slice(0, 10).map(f => `
+      <div class="clip-item">
+        <div class="title">${escHtml(f.name.replace(/\.md$/, ''))}</div>
+        <div class="meta">${new Date(f.createdTime).toLocaleString('ja-JP')}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="clip-item"><div class="meta">${escHtml(e.message)}</div></div>`;
+  }
+}
+
+$('#btn-refresh').addEventListener('click', loadRecentClips);
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ===== Web Share Target 受信 =====
+function handleShareTarget() {
+  const params = new URLSearchParams(window.location.search);
+  const sharedUrl = params.get('url') || params.get('text') || '';
+  const sharedTitle = params.get('title') || '';
+  if (sharedUrl || sharedTitle) {
+    // URLパラメータをクリア
+    history.replaceState(null, '', window.location.pathname);
+    // 入力欄にセット
+    if (sharedUrl.startsWith('http')) {
+      $('#clip-url').value = sharedUrl;
+      $('#clip-title').value = sharedTitle;
+    } else {
+      // テキスト共有の場合はメモタブへ
+      $$('.tab').forEach(t => t.classList.remove('active'));
+      $$('.tab')[1].classList.add('active');
+      $('#tab-clip').classList.add('hide');
+      $('#tab-memo').classList.remove('hide');
+      $('#memo-text').value = sharedTitle ? `${sharedTitle}\n${sharedUrl}` : sharedUrl;
+    }
+    // プレビュー表示
+    $('#share-preview').classList.remove('hide');
+    $('#share-content').textContent = sharedTitle ? `${sharedTitle}\n${sharedUrl}` : sharedUrl;
+  }
+}
+
+// ===== 初期化 =====
+window.addEventListener('load', () => {
+  handleShareTarget();
+  // GIS読み込み後に初期化
+  const script = document.createElement('script');
+  script.src = 'https://accounts.google.com/gsi/client';
+  script.onload = () => {
+    initGIS();
+    // 保存済みトークンで自動ログイン試行
+    const saved = localStorage.getItem('dc_token');
+    if (saved) {
+      accessToken = saved;
+      // トークン有効性チェック
+      fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: { Authorization: `Bearer ${saved}` }
+      }).then(r => {
+        if (r.ok) { onLoggedIn(); }
+        else { localStorage.removeItem('dc_token'); accessToken = null; }
+      }).catch(() => { localStorage.removeItem('dc_token'); accessToken = null; });
+    }
+  };
+  document.head.appendChild(script);
+});
+
+// ===== Service Worker登録 =====
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>

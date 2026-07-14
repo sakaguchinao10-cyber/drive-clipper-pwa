@@ -1,0 +1,24 @@
+{
+  "name": "DriveClipper",
+  "short_name": "DriveClipper",
+  "description": "WebページをGoogle Driveにクリップ保存",
+  "start_url": "/drive-clipper-pwa/",
+  "scope": "/drive-clipper-pwa/",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "orientation": "any",
+  "icons": [
+    { "src": "icons/icon192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "share_target": {
+    "action": "/drive-clipper-pwa/",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}
