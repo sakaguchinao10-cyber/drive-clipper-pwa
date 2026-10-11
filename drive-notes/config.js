@@ -12,4 +12,12 @@ window.DRIVENOTES_CONFIG = {
 
   // 写真を縮小して保存するときの長辺ピクセル数
   resizeMaxPx: 2560,
+
+  // 操作がないまま この分数が過ぎると自動でログアウトする
+  autoLogoutMinutes: 15,
+
+  // Drive からの取り込み（Google Picker）用
+  // pickerApiKey は Google Cloud で作成した API キー（ウェブサイト制限: sakaguchinao10-cyber.github.io）
+  pickerApiKey: '',
+  appId: '548818324610', // DriveClippers のプロジェクト番号
 };

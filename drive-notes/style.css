@@ -305,3 +305,7 @@ main { flex: 1; min-width: 0; outline: none; }
   .md { padding: 16px; }
   .actions .btn { flex: 1; }
 }
+
+.import-list { margin-top: 12px; }
+.row-sub.ok { color: var(--accent); }
+.row-sub.ng { color: var(--danger); white-space: normal; }

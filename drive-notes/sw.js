@@ -1,5 +1,5 @@
 // DriveNotes サービスワーカー: アプリ本体だけをキャッシュ（ノートのデータはキャッシュしない）
-const VERSION = 'drivenotes-v2';
+const VERSION = 'drivenotes-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png', 'lib/marked.min.js', 'lib/purify.min.js'];
 

@@ -125,6 +125,7 @@ async function signIn() {
       if (r.error) return reject(new Error(`ログインできませんでした（${r.error}）`));
       S.token = r.access_token;
       S.exp = Date.now() + (Number(r.expires_in) || 3600) * 1000;
+      S.lastActive = Date.now();
       try { sessionStorage.setItem('dn_token', JSON.stringify({ token: S.token, exp: S.exp })); } catch {}
       resolve();
     };
@@ -133,9 +134,43 @@ async function signIn() {
   });
 }
 
+/* ------------------------------------------------------------ 自動ログアウト */
+// 一定時間操作がなければ、トークン・表示中のノート・画像を破棄してログイン画面に戻す。
+// （下書きは端末内に残す。トークンの取り消し（revoke）は DriveClipper と同じ許可を
+//   消してしまうため行わず、アプリ内から破棄するだけにする）
+const IDLE_MS = (Number(C.autoLogoutMinutes) || 15) * 60 * 1000;
+S.lastActive = Date.now();
+function signOut(message) {
+  S.token = null;
+  S.exp = 0;
+  try { sessionStorage.removeItem('dn_token'); } catch {}
+  for (const url of S.blobs.values()) URL.revokeObjectURL(url);
+  S.blobs.clear();
+  S.root = null;
+  S.names.clear();
+  S.parents.clear();
+  if (typeof resetCaches === 'function') resetCaches();
+  document.querySelector('.relogin')?.remove();
+  document.querySelectorAll('dialog').forEach((d) => d.remove());
+  closeLightbox();
+  closeDrawer();
+  $('#searchInput').value = '';
+  loginView(message);
+}
+function checkIdle() {
+  if (S.token && Date.now() - S.lastActive > IDLE_MS) {
+    signOut(`${Math.round(IDLE_MS / 60000)}分間操作がなかったため、自動でログアウトしました。`);
+  }
+}
+['pointerdown', 'keydown', 'wheel', 'touchstart', 'input'].forEach((ev) =>
+  window.addEventListener(ev, () => { S.lastActive = Date.now(); }, { capture: true, passive: true }));
+setInterval(checkIdle, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkIdle(); });
+
 /* ------------------------------------------------------------ Drive API */
 async function req(url, opts = {}) {
   if (!hasToken()) throw new AuthError('ログインの有効期限が切れました');
+  S.lastActive = Date.now();
   let r;
   try {
     r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${S.token}` } });
@@ -283,7 +318,7 @@ async function uploadFile(blob, name, parentId, mime, onProgress) {
     const x = new XMLHttpRequest();
     x.open('PUT', location);
     x.setRequestHeader('Content-Type', mime);
-    x.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    x.upload.onprogress = (e) => { S.lastActive = Date.now(); if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
     x.onload = () => (x.status < 300 ? resolve(JSON.parse(x.responseText)) : reject(new Error(`アップロードに失敗しました（${x.status}）`)));
     x.onerror = () => reject(new Error('アップロード中に通信が切れました'));
     x.send(blob);
@@ -343,7 +378,7 @@ function loginView(message) {
         try { await signIn(); route(); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
       },
     }, 'Google でログイン'),
-    h('p', { class: 'fine' }, 'アクセス範囲は DriveClippers のアプリが作成したファイルだけです（drive.file）。')));
+    h('p', { class: 'fine' }, `アクセス範囲は DriveClippers のアプリが作成したファイルと、取り込み時に選んだファイルだけです（drive.file）。${Math.round(IDLE_MS / 60000)}分間操作がないと自動でログアウトします。`)));
 }
 function reloginBanner() {
   if ($('.relogin')) return;
@@ -392,6 +427,7 @@ function renderSidebar() {
   nav.replaceChildren(
     h('a', { href: '#/', class: `home ${current === '#/' || current === '' ? 'active' : ''}` }, homeIcon(), h('span', {}, 'ホーム')),
     h('a', { href: '#/new', class: 'new-note' }, plusIcon(), h('span', {}, '新しいノート')),
+    h('a', { href: '#/import', class: current === '#/import' ? 'active' : null }, clipIcon(), h('span', {}, 'Drive から取り込み')),
     h('div', { class: 'nav-head' }, h('span', {}, 'Evernote ノートブック'),
       h('button', { class: 'link-btn', title: '一覧を更新', onclick: async () => { await loadSidebarData(true); S.notebookOptions = null; renderSidebar(); toast('一覧を更新しました'); } }, '更新')),
     ...data.notebooks.map(item),
@@ -443,6 +479,7 @@ async function viewHome(nav) {
     h('h1', { class: 'page-title' }, 'ホーム'),
     h('div', { class: 'quick' },
       h('a', { class: 'btn primary', href: '#/new' }, plusIcon(), ' 新しいノート'),
+      h('a', { class: 'btn', href: '#/import' }, clipIcon(), ' Drive から取り込み'),
       h('button', { class: 'btn only-mobile', onclick: openDrawer }, folderIcon(), ' ノートブック')),
     h('h2', { class: 'sec' }, '最近更新したノート'),
     recent.files.length ? h('div', { class: 'list' }, recent.files.map((f) => noteRow(f, true))) : h('p', { class: 'muted' }, 'ノートがまだありません。'),
@@ -1046,6 +1083,151 @@ async function renameNotebookDialog(folderId, parts) {
   });
 }
 
+/* ------------------------------------------------------------ Drive からの取り込み（1ファイル＝1ノート） */
+const GOOGLE_DOC = 'application/vnd.google-apps.document';
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('ファイル選択画面を読み込めませんでした'));
+    document.head.append(s);
+  });
+}
+async function pickDriveFiles() {
+  if (!C.pickerApiKey) {
+    throw new Error('ファイル選択画面の設定（APIキー）がまだ登録されていません。説明書の「取り込みの準備」をご覧ください。');
+  }
+  if (!hasToken()) throw new AuthError('ログインの有効期限が切れました');
+  if (!window.gapi) await loadScript('https://apis.google.com/js/api.js');
+  if (!window.gapi?.load) throw new Error('ファイル選択画面を読み込めませんでした。通信状況を確認してください。');
+  await new Promise((resolve, reject) => gapi.load('picker', { callback: resolve, onerror: () => reject(new Error('ファイル選択画面を読み込めませんでした')) }));
+  return new Promise((resolve) => {
+    const P = google.picker;
+    const view = new P.DocsView(P.ViewId.DOCS).setIncludeFolders(true).setSelectFolderEnabled(false).setMode(P.DocsViewMode.LIST);
+    const picker = new P.PickerBuilder()
+      .setAppId(C.appId)
+      .setOAuthToken(S.token)
+      .setDeveloperKey(C.pickerApiKey)
+      .setLocale('ja')
+      .setTitle('取り込むファイルを選択（複数選択できます）')
+      .addView(view)
+      .enableFeature(P.Feature.MULTISELECT_ENABLED)
+      .setCallback((d) => {
+        if (d.action === P.Action.PICKED) resolve(d.docs.map((x) => ({ id: x.id, name: x.name, mimeType: x.mimeType })));
+        else if (d.action === P.Action.CANCEL) resolve([]);
+      })
+      .build();
+    picker.setVisible(true);
+  });
+}
+async function exportFile(id, mime, asText) {
+  const r = await req(`${DRIVE}/files/${encodeURIComponent(id)}/export?mimeType=${encodeURIComponent(mime)}`);
+  return asText ? r.text() : r.blob();
+}
+
+async function importOne(file, ctx, index) {
+  const meta = await getMeta(file.id);
+  const when = new Date(meta.createdTime || meta.modifiedTime || Date.now());
+  const dot = meta.name.lastIndexOf('.');
+  const title = (dot > 0 && !meta.mimeType.startsWith('application/vnd.google-apps') ? meta.name.slice(0, dot) : meta.name).trim() || '無題';
+  const attName = (n) => `${ctx.ts}_${pad(index + 1, 3)}_${safeAttName(n)}`;
+  const linkTo = (n) => encPath(`${'../'.repeat(ctx.parts.length + 1)}${ATT_FOLDER}/${[...ctx.parts, n].join('/')}`);
+  const ensureAtt = async () => (ctx.attId = ctx.attId || await resolveFolderPath(S.root.attId, ctx.parts, true));
+  let body = '';
+  if (meta.mimeType === GOOGLE_DOC) {
+    // Google ドキュメントは本文として取り込む（Markdown 変換、できなければテキスト）
+    body = await exportFile(meta.id, 'text/markdown', true).catch(() => exportFile(meta.id, 'text/plain', true));
+  } else if (/^text\/(plain|markdown|x-markdown)$/.test(meta.mimeType) || /\.(txt|md)$/i.test(meta.name)) {
+    body = await getText(meta.id);
+  } else if (meta.mimeType.startsWith('application/vnd.google-apps.')) {
+    // スプレッドシート等は PDF にして添付
+    const pdf = await exportFile(meta.id, 'application/pdf', false);
+    const n = attName(`${safeName(meta.name, 60)}.pdf`);
+    await uploadFile(pdf, n, await ensureAtt(), 'application/pdf');
+    body = `[📎 ${meta.name}.pdf](${linkTo(n)})`;
+  } else {
+    // PDF・写真などは Drive 上でそのままコピー（端末への読み込み不要）
+    const n = attName(meta.name);
+    await copyFile(meta.id, n, await ensureAtt());
+    const label = meta.name.replace(/[[\]]/g, '');
+    body = meta.mimeType.startsWith('image/') ? `![${label}](${linkTo(n)})` : `[📎 ${label}](${linkTo(n)})`;
+  }
+  const fm = ['---',
+    `title: ${JSON.stringify(title)}`,
+    `notebook: ${JSON.stringify(ctx.parts[ctx.parts.length - 1])}`,
+    `created: ${JSON.stringify(isoLocal(when))}`,
+    `updated: ${JSON.stringify(isoLocal(new Date()))}`,
+    'tags: ["取り込み"]',
+    meta.webViewLink ? `source_url: ${JSON.stringify(meta.webViewLink)}` : null,
+    'source: "Drive取り込み"',
+    '---', ''].filter((l) => l != null).join('\n');
+  let name = `${stamp(when)}_${safeName(title)}.md`;
+  if (await findChild(ctx.nbId, name)) name = name.replace(/\.md$/i, `_${pad(index + 1, 3)}.md`);
+  return uploadFile(new Blob([fm + body.trim() + '\n'], { type: 'text/markdown' }), name, ctx.nbId, 'text/markdown');
+}
+
+async function viewImport(nav) {
+  loadingView('ノートブックを準備中…');
+  const opts = await notebookOptions();
+  if (nav !== S.nav) return;
+  const select = h('select', { name: 'nb' },
+    opts.map((o) => h('option', { value: o.id }, o.label)),
+    h('option', { value: '__new__', selected: true }, '＋ 新しいノートブックを作る'));
+  const newNb = h('input', { type: 'text', placeholder: '新しいノートブック名（例：医療）', maxlength: 60 });
+  select.addEventListener('change', () => { newNb.hidden = select.value !== '__new__'; });
+  const results = h('div', { class: 'list import-list' });
+  const summary = h('p', { class: 'muted' });
+  const pickBtn = h('button', { class: 'btn primary large', type: 'button' }, 'Google Drive からファイルを選ぶ');
+  pickBtn.addEventListener('click', async () => {
+    let opt = opts.find((o) => o.id === select.value);
+    if (select.value === '__new__') {
+      const n = newNb.value.trim();
+      if (!n) { toast('取り込み先のノートブック名を入力してください'); newNb.focus(); return; }
+      opt = { id: null, label: safeName(n, 60), parts: [safeName(n, 60)] };
+    }
+    pickBtn.disabled = true;
+    try {
+      const files = await pickDriveFiles();
+      if (!files.length) return;
+      const ctx = { parts: opt.parts, nbId: opt.id || await resolveFolderPath(S.root.mdId, opt.parts, true), attId: null, ts: stamp(new Date(), true) };
+      if (!opt.id) { resetCaches(); await loadSidebarData(); renderSidebar(); }
+      results.replaceChildren();
+      let ok = 0;
+      for (const [i, f] of files.entries()) {
+        const row = h('div', { class: 'row' }, noteIcon(),
+          h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, f.name), h('div', { class: 'row-sub' }, '取り込み中…')));
+        results.append(row);
+        summary.textContent = `${i + 1} / ${files.length} 件目を取り込み中…`;
+        try {
+          const note = await importOne(f, ctx, i);
+          ok++;
+          row.replaceWith(h('a', { class: 'row', href: `#/n/${note.id}` }, noteIcon(),
+            h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, parseName(note.name).title), h('div', { class: 'row-sub ok' }, '✓ 取り込み完了'))));
+        } catch (err) {
+          if (err instanceof AuthError) { reloginBanner(); row.querySelector('.row-sub').textContent = '中断（再ログイン後にもう一度選んでください）'; break; }
+          row.querySelector('.row-sub').textContent = `✗ ${err.message}`;
+          row.querySelector('.row-sub').classList.add('ng');
+        }
+      }
+      summary.replaceChildren(`${ok} / ${files.length} 件を「${opt.label}」に取り込みました。元のファイルはそのまま残っています。 `,
+        h('a', { href: `#/f/${ctx.nbId}` }, 'ノートブックを開く'));
+    } catch (err) {
+      if (err instanceof AuthError) reloginBanner(); else toast(err.message, 7000);
+    } finally {
+      pickBtn.disabled = false;
+    }
+  });
+  setMain(h('section', { class: 'page' },
+    h('h1', { class: 'page-title' }, 'Drive から取り込み'),
+    h('p', { class: 'muted' }, 'Google Drive にある PDF・写真・メモなどを選ぶと、1ファイルずつノートとして取り込みます。元のファイルは移動・変更しません。'),
+    h('div', { class: 'editor' },
+      h('label', { class: 'field' }, h('span', {}, '取り込み先のノートブック'), select, newNb),
+      h('div', { class: 'actions' }, pickBtn)),
+    summary,
+    results));
+}
+
 /* ------------------------------------------------------------ ルーター */
 async function route() {
   const nav = ++S.nav;
@@ -1066,6 +1248,7 @@ async function route() {
     else if (seg[0] === 'n' && seg[1]) await viewNote(seg[1], nav);
     else if (seg[0] === 'new') await viewNew(nav, params);
     else if (seg[0] === 'search') await viewSearch(params.get('q') || '', nav);
+    else if (seg[0] === 'import') await viewImport(nav);
     else await viewHome(nav);
   } catch (err) {
     if (nav === S.nav) handleError(err, route);
