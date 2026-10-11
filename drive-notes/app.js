@@ -428,6 +428,7 @@ function renderSidebar() {
     h('a', { href: '#/', class: `home ${current === '#/' || current === '' ? 'active' : ''}` }, homeIcon(), h('span', {}, 'ホーム')),
     h('a', { href: '#/new', class: 'new-note' }, plusIcon(), h('span', {}, '新しいノート')),
     h('a', { href: '#/import', class: current === '#/import' ? 'active' : null }, clipIcon(), h('span', {}, 'Drive から取り込み')),
+    h('a', { href: '#', class: 'create-nb', onclick: (e) => { e.preventDefault(); closeDrawer(); createNotebookDialog(); } }, folderIcon(), h('span', {}, 'ノートブックを作成')),
     h('div', { class: 'nav-head' }, h('span', {}, 'Evernote ノートブック'),
       h('button', { class: 'link-btn', title: '一覧を更新', onclick: async () => { await loadSidebarData(true); S.notebookOptions = null; renderSidebar(); toast('一覧を更新しました'); } }, '更新')),
     ...data.notebooks.map(item),
@@ -480,6 +481,7 @@ async function viewHome(nav) {
     h('div', { class: 'quick' },
       h('a', { class: 'btn primary', href: '#/new' }, plusIcon(), ' 新しいノート'),
       h('a', { class: 'btn', href: '#/import' }, clipIcon(), ' Drive から取り込み'),
+      h('button', { class: 'btn', onclick: () => createNotebookDialog() }, folderIcon(), ' ノートブックを作成'),
       h('button', { class: 'btn only-mobile', onclick: openDrawer }, folderIcon(), ' ノートブック')),
     h('h2', { class: 'sec' }, '最近更新したノート'),
     recent.files.length ? h('div', { class: 'list' }, recent.files.map((f) => noteRow(f, true))) : h('p', { class: 'muted' }, 'ノートがまだありません。'),
@@ -1038,6 +1040,27 @@ async function moveNoteDialog(meta, text, fromParts) {
     resetCaches();
     toast(`「${to.label}」へ移動しました`);
     if (location.hash === `#/n/${meta.id}`) route(); else location.hash = `#/n/${meta.id}`;
+  });
+}
+
+// ノートブックの作成（本文用フォルダを作る。添付用は最初の添付保存時に自動作成）
+async function createNotebookDialog() {
+  const input = h('input', { name: 'name', type: 'text', required: true, maxlength: 60, placeholder: '例：医療' });
+  const res = await openDialog({
+    title: 'ノートブックを作成',
+    fields: [h('label', { class: 'field' }, h('span', {}, 'ノートブック名'), input)],
+    ok: '作成',
+  });
+  if (!res) return;
+  const name = safeName(String(res.data.get('name') || '').trim(), 60);
+  if (!String(res.data.get('name') || '').trim()) { res.close(); return; }
+  await runAction(res, '作成中…', async () => {
+    if (await findChild(S.root.mdId, name, { folder: true })) throw new Error(`「${name}」というノートブックは既にあります`);
+    const f = await createFolder(S.root.mdId, name);
+    resetCaches();
+    await loadSidebarData();
+    toast(`ノートブック「${name}」を作成しました`);
+    location.hash = `#/f/${f.id}`;
   });
 }
 

@@ -86,6 +86,7 @@ svg { flex: none; }
 .sidebar a:hover { background: var(--surface-2); }
 .sidebar a.active { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 .sidebar .new-note { color: var(--accent); font-weight: 700; }
+.sidebar .create-nb svg { color: var(--accent); }
 .nav-head {
   display: flex; align-items: center; justify-content: space-between;
   margin: 18px 12px 4px; font-size: 12px; color: var(--muted); letter-spacing: .04em;
