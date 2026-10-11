@@ -112,7 +112,7 @@ main { flex: 1; min-width: 0; outline: none; }
 /* ---- ページ */
 .page { max-width: 860px; margin: 0 auto; padding: 20px 20px 120px; }
 .page-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.page-head .btn { margin-left: auto; }
+.head-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .page-title { font-size: 24px; margin: 6px 0 14px; line-height: 1.4; }
 .sec { font-size: 14px; color: var(--muted); margin: 28px 0 8px; font-weight: 700; letter-spacing: .04em; }
 .count { color: var(--muted); font-size: 14px; }
@@ -237,6 +237,21 @@ main { flex: 1; min-width: 0; outline: none; }
 .md pre { background: var(--surface-2); padding: 12px; border-radius: 8px; overflow-x: auto; }
 .md blockquote { margin: 0; padding-left: 14px; border-left: 3px solid var(--line); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--line); }
+.note-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.btn.danger { color: var(--danger); }
+.btn.danger:hover { border-color: var(--danger); }
+.btn.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.dlg {
+  width: min(440px, calc(100% - 32px)); padding: 22px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow);
+}
+.dlg::backdrop { background: rgba(0, 0, 0, .45); }
+.dlg h2 { margin: 0 0 8px; font-size: 18px; }
+.dlg .muted { font-size: 14px; margin: 0 0 14px; }
+.dlg form { display: grid; gap: 12px; }
+.dlg .actions { margin-top: 6px; }
+.dlg-status { margin: 0; font-size: 14px; color: var(--accent); }
 .note-foot { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
 
 .lightbox {

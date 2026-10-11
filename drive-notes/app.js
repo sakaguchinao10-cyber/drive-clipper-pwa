@@ -201,6 +201,43 @@ async function createFolder(parentId, name) {
 async function ensureFolder(parentId, name) {
   return (await findChild(parentId, name, { folder: true }))?.id || (await createFolder(parentId, name)).id;
 }
+async function patchFile(id, { name, trashed, addParents, removeParents } = {}) {
+  const body = {};
+  if (name != null) body.name = name;
+  if (trashed != null) body.trashed = trashed;
+  const r = await req(`${DRIVE}/files/${encodeURIComponent(id)}?` + qs({ addParents, removeParents, fields: FIELDS }), {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json; charset=UTF-8' }, body: JSON.stringify(body),
+  });
+  const f = await r.json();
+  remember(f);
+  return f;
+}
+async function updateText(id, text, meta = {}) {
+  const b = 'dn' + Math.random().toString(36).slice(2);
+  const body = new Blob([
+    `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: text/markdown; charset=UTF-8\r\n\r\n`,
+    text, `\r\n--${b}--`]);
+  const r = await req(`${UPLOAD}/files/${encodeURIComponent(id)}?uploadType=multipart&fields=${FIELDS}`, {
+    method: 'PATCH', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body,
+  });
+  const f = await r.json();
+  remember(f);
+  return f;
+}
+async function copyFile(id, name, parentId) {
+  const r = await req(`${DRIVE}/files/${encodeURIComponent(id)}/copy?fields=${FIELDS}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8' }, body: JSON.stringify({ name, parents: [parentId] }),
+  });
+  const f = await r.json();
+  remember(f);
+  return f;
+}
+function resetCaches() {
+  S.sidebar = null;
+  S.notebookOptions = null;
+  pathCache.clear();
+  attCache.clear();
+}
 const pathCache = new Map();
 async function resolveFolderPath(baseId, parts, create = false) {
   let id = baseId;
@@ -472,11 +509,14 @@ async function viewFolder(id, nav, params) {
   } },
   h('input', { name: 'q', type: 'search', value: filter, placeholder: `「${name}」内を検索`, enterkeyhint: 'search' }));
   const isNotebook = S.parents.get(id) === S.root.mdId;
+  const inEvernote = crumbs[0]?.id === S.root.mdId && id !== S.root.mdId;
   setMain(h('section', { class: 'page' },
     crumbBar(crumbs.slice(1)),
     h('div', { class: 'page-head' },
       h('h1', { class: 'page-title' }, name), count,
-      isNotebook ? h('a', { class: 'btn small', href: `#/new?nb=${id}` }, plusIcon(), ' このノートブックに追加') : null),
+      h('div', { class: 'head-actions' },
+        inEvernote ? h('button', { class: 'btn small', onclick: () => renameNotebookDialog(id, crumbs.slice(1).map((c) => c.name)) }, '名前を変更') : null,
+        isNotebook ? h('a', { class: 'btn small', href: `#/new?nb=${id}` }, plusIcon(), ' このノートブックに追加') : null)),
     filterForm,
     filter ? h('p', { class: 'muted' }, `「${filter}」の検索結果（関連度順）`, ' ', h('a', { href: `#/f/${id}` }, '解除')) : null,
     list,
@@ -538,20 +578,30 @@ function renderMarkdown(md) {
 }
 
 const attCache = new Map();
-function resolveAtt(path) {
-  if (!attCache.has(path)) {
-    attCache.set(path, (async () => {
+// 添付は「ノートが今いるノートブック」の添付フォルダから探す。
+// 見つからなければ本文に記録されたパス（作成時のノートブック名）で探す。
+// これにより、ノートブック名を変えても本文を書き換えずに画像を表示できる。
+function resolveAtt(path, nbParts = []) {
+  const key = nbParts.join('/') + '|' + path;
+  if (!attCache.has(key)) {
+    attCache.set(key, (async () => {
       const parts = path.split('/');
       const name = parts.pop();
+      if (nbParts.length) {
+        const cur = await resolveFolderPath(S.root.attId, nbParts);
+        const f = cur && await findChild(cur, name);
+        if (f) return f;
+      }
+      if (parts.join('/') === nbParts.join('/')) return null;
       const folderId = await resolveFolderPath(S.root.attId, parts);
       return folderId ? findChild(folderId, name) : null;
-    })().catch((e) => { attCache.delete(path); throw e; }));
+    })().catch((e) => { attCache.delete(key); throw e; }));
   }
-  return attCache.get(path);
+  return attCache.get(key);
 }
-async function loadImage(img) {
+async function loadImage(img, nbParts) {
   try {
-    const f = await resolveAtt(img.dataset.att);
+    const f = await resolveAtt(img.dataset.att, nbParts);
     if (!f) throw new Error('missing');
     let url = S.blobs.get(f.id);
     if (!url) {
@@ -568,16 +618,16 @@ async function loadImage(img) {
     if (err instanceof AuthError) reloginBanner();
   }
 }
-function wireAttachments(container) {
+function wireAttachments(container, nbParts) {
   const io = 'IntersectionObserver' in window
-    ? new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); loadImage(e.target); } }), { rootMargin: '600px' })
+    ? new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); loadImage(e.target, nbParts); } }), { rootMargin: '600px' })
     : null;
-  container.querySelectorAll('img[data-att]').forEach((img) => (io ? io.observe(img) : loadImage(img)));
+  container.querySelectorAll('img[data-att]').forEach((img) => (io ? io.observe(img) : loadImage(img, nbParts)));
   container.querySelectorAll('a[data-att]').forEach((a) => a.addEventListener('click', async (e) => {
     e.preventDefault();
     const w = window.open('about:blank', '_blank');
     try {
-      const f = await resolveAtt(a.dataset.att);
+      const f = await resolveAtt(a.dataset.att, nbParts);
       if (!f) throw new Error('添付ファイルが見つかりません');
       const link = f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`;
       if (w) w.location.href = link; else location.href = link;
@@ -611,6 +661,7 @@ async function viewNote(id, nav) {
   const content = h('div', { class: 'md' });
   content.append(renderMarkdown(body));
   const parentId = S.parents.get(id);
+  const nbParts = crumbs[0]?.id === S.root.mdId ? crumbs.slice(1).map((c) => c.name) : [];
   setMain(h('article', { class: 'page note' },
     crumbBar(crumbs.slice(1)),
     h('h1', { class: 'note-title' }, fm.title || title),
@@ -620,11 +671,15 @@ async function viewNote(id, nav) {
       fm.source_url ? h('a', { href: fm.source_url, target: '_blank', rel: 'noopener noreferrer' }, '元のページ') : null,
       h('a', { href: meta.webViewLink || `https://drive.google.com/file/d/${id}/view`, target: '_blank', rel: 'noopener' }, 'Driveで開く')),
     tags.length ? h('div', { class: 'tags' }, tags.map((t) => h('span', { class: 'tag' }, String(t).trim()))) : null,
+    h('div', { class: 'note-tools' },
+      h('button', { class: 'btn small', onclick: () => renameNoteDialog(meta, text) }, 'タイトル変更'),
+      h('button', { class: 'btn small', onclick: () => moveNoteDialog(meta, text, nbParts) }, '移動'),
+      h('button', { class: 'btn small danger', onclick: () => deleteNoteDialog(meta) }, '削除')),
     content,
     h('div', { class: 'note-foot' },
       parentId ? h('a', { class: 'btn', href: `#/f/${parentId}` }, '← 一覧に戻る') : null,
       parentId && S.parents.get(parentId) === S.root.mdId ? h('a', { class: 'btn', href: `#/new?nb=${parentId}` }, plusIcon(), ' 同じノートブックに追加') : null)));
-  wireAttachments(content);
+  wireAttachments(content, nbParts);
 }
 
 /* ------------------------------------------------------------ 検索 */
@@ -810,6 +865,185 @@ async function saveNote({ opt, title, body, tags, files, resize, onProgress }) {
   onProgress(1, '完了');
   if (!opt.id) { S.sidebar = null; S.notebookOptions = null; }
   return { file, notebookId: nbId };
+}
+
+/* ------------------------------------------------------------ 整理（タイトル変更・移動・削除・ノートブック名変更） */
+const FM_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const ATT_LINK_RE = new RegExp(`\\]\\(([^)\\s]*${ATT_FOLDER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/[^)\\s]*)\\)`, 'g');
+const encPath = (s) => s.replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29');
+
+// フロントマターの値を書き換える（無ければ何もしない）
+function setFrontMatter(text, updates) {
+  const m = text.match(FM_RE);
+  if (!m) return text;
+  const lines = m[1].split(/\r?\n/);
+  for (const [k, v] of Object.entries(updates)) {
+    const line = `${k}: ${JSON.stringify(v)}`;
+    const i = lines.findIndex((l) => l.startsWith(k + ':'));
+    if (i >= 0) lines[i] = line; else lines.push(line);
+  }
+  return `---\n${lines.join('\n')}\n---\n` + text.slice(m[0].length);
+}
+const datePrefix = (name) => (name.match(/^(\d{8})_/) || [])[0] || '';
+
+// 汎用ダイアログ（入力欄・選択肢・確認）
+function openDialog({ title, message, fields = [], ok = 'OK', danger = false }) {
+  return new Promise((resolve) => {
+    const dlg = h('dialog', { class: 'dlg' });
+    const status = h('p', { class: 'dlg-status', hidden: true });
+    const form = h('form', { method: 'dialog' },
+      h('h2', {}, title),
+      message ? h('p', { class: 'muted' }, message) : null,
+      fields,
+      status,
+      h('div', { class: 'actions' },
+        h('button', { class: `btn ${danger ? 'danger-fill' : 'primary'}`, value: 'ok' }, ok),
+        h('button', { class: 'btn', value: 'cancel', formnovalidate: true }, 'キャンセル')));
+    dlg.append(form);
+    document.body.append(dlg);
+    const api = {
+      busy(text) {
+        status.hidden = false;
+        status.textContent = text;
+        form.querySelectorAll('button,input,select').forEach((el) => { el.disabled = true; });
+      },
+      close() { dlg.close(); dlg.remove(); },
+    };
+    form.addEventListener('submit', (e) => {
+      const v = e.submitter?.value;
+      if (v !== 'ok') { api.close(); resolve(null); return; }
+      e.preventDefault();
+      resolve({ data: new FormData(form), ...api });
+    });
+    dlg.addEventListener('cancel', () => { api.close(); resolve(null); });
+    dlg.showModal();
+    form.querySelector('input,select')?.focus();
+  });
+}
+async function runAction(res, label, fn) {
+  try {
+    res.busy(label);
+    await fn();
+    res.close();
+  } catch (err) {
+    res.close();
+    if (err instanceof AuthError) reloginBanner();
+    toast(err.message || String(err), 6000);
+  }
+}
+
+// 1. タイトル変更: ファイル名（日付部分は維持）とフロントマターの title を変更
+async function renameNoteDialog(meta, text) {
+  const { title } = parseName(meta.name);
+  const input = h('input', { name: 'title', type: 'text', value: parseFrontMatter(text).fm.title || title, required: true, maxlength: 120 });
+  const res = await openDialog({ title: 'タイトル変更', fields: [h('label', { class: 'field' }, h('span', {}, '新しいタイトル'), input)], ok: '変更' });
+  if (!res) return;
+  const newTitle = String(res.data.get('title') || '').trim();
+  if (!newTitle) { res.close(); return; }
+  await runAction(res, '変更中…', async () => {
+    const parentId = S.parents.get(meta.id);
+    const name = `${datePrefix(meta.name)}${safeName(newTitle)}.md`;
+    if (name !== meta.name) {
+      const dup = await findChild(parentId, name);
+      if (dup && dup.id !== meta.id) throw new Error('同じノートブックに同じ名前のノートがあります');
+    }
+    const newText = setFrontMatter(text, { title: newTitle, updated: isoLocal(new Date()) });
+    if (newText !== text) await updateText(meta.id, newText, { name });
+    else await patchFile(meta.id, { name });
+    toast('タイトルを変更しました');
+    route();
+  });
+}
+
+// 2. 移動: 添付は移動先へ「複製」（同じ添付を他のノートが共有している場合があるため元は残す）
+async function moveNoteDialog(meta, text, fromParts) {
+  const opts = await notebookOptions();
+  const curId = S.parents.get(meta.id);
+  const select = h('select', { name: 'to', required: true },
+    opts.filter((o) => o.id !== curId).map((o) => h('option', { value: o.id }, o.label)),
+    h('option', { value: '__new__' }, '＋ 新しいノートブックを作る'));
+  const newNb = h('input', { name: 'newnb', type: 'text', placeholder: '新しいノートブック名', hidden: true, maxlength: 60 });
+  select.addEventListener('change', () => { newNb.hidden = select.value !== '__new__'; });
+  const res = await openDialog({
+    title: 'ノートを移動',
+    message: '写真などの添付ファイルも一緒に移動先へコピーします。',
+    fields: [h('label', { class: 'field' }, h('span', {}, '移動先のノートブック'), select, newNb)],
+    ok: '移動',
+  });
+  if (!res) return;
+  let to = opts.find((o) => o.id === res.data.get('to'));
+  if (res.data.get('to') === '__new__') {
+    const n = String(res.data.get('newnb') || '').trim();
+    if (!n) { res.close(); toast('新しいノートブック名を入力してください'); return; }
+    to = { id: null, label: safeName(n, 60), parts: [safeName(n, 60)] };
+  }
+  await runAction(res, '移動の準備中…', async () => {
+    const toNbId = to.id || await resolveFolderPath(S.root.mdId, to.parts, true);
+    // 添付を移動先へ複製
+    const paths = [...new Set([...text.matchAll(ATT_LINK_RE)].map((m) => attPath(m[1])).filter(Boolean))];
+    let toAttId = null;
+    for (const [i, p] of paths.entries()) {
+      res.busy(`添付ファイルをコピー中 ${i + 1}/${paths.length}`);
+      const f = await resolveAtt(p, fromParts);
+      if (!f) continue;
+      toAttId = toAttId || await resolveFolderPath(S.root.attId, to.parts, true);
+      if (!(await findChild(toAttId, f.name))) await copyFile(f.id, f.name, toAttId);
+    }
+    // 本文のリンクを移動先ノートブックに合わせて書き換え
+    res.busy('ノートを移動中…');
+    const prefix = encPath(`${'../'.repeat(to.parts.length + 1)}${ATT_FOLDER}/${to.parts.join('/')}/`);
+    let newText = text.replace(ATT_LINK_RE, (all, link) => `](${prefix}${link.split('/').pop()})`);
+    newText = setFrontMatter(newText, { notebook: to.parts[to.parts.length - 1], updated: isoLocal(new Date()) });
+    let name = meta.name;
+    if (await findChild(toNbId, name)) name = name.replace(/\.md$/i, `_${stamp(new Date(), true).slice(8)}.md`);
+    if (newText !== text || name !== meta.name) await updateText(meta.id, newText, { name });
+    await patchFile(meta.id, { addParents: toNbId, removeParents: (meta.parents || [curId]).join(',') });
+    resetCaches();
+    toast(`「${to.label}」へ移動しました`);
+    if (location.hash === `#/n/${meta.id}`) route(); else location.hash = `#/n/${meta.id}`;
+  });
+}
+
+// 4. 削除: Drive のゴミ箱へ（30日以内なら Drive から復元可能）
+async function deleteNoteDialog(meta) {
+  const { title } = parseName(meta.name);
+  const res = await openDialog({
+    title: 'ノートを削除',
+    message: `「${title}」を Google Drive のゴミ箱へ移動します。30日以内なら Drive のゴミ箱から元に戻せます。添付ファイルは他のノートと共有されている場合があるため残します。`,
+    ok: '削除', danger: true,
+  });
+  if (!res) return;
+  await runAction(res, '削除中…', async () => {
+    const parentId = S.parents.get(meta.id);
+    await patchFile(meta.id, { trashed: true });
+    toast('ゴミ箱へ移動しました');
+    location.hash = parentId ? `#/f/${parentId}` : '#/';
+  });
+}
+
+// 3. ノートブック名変更: 本文用(02)と添付用(03)のフォルダ名を両方変更
+async function renameNotebookDialog(folderId, parts) {
+  const oldName = parts[parts.length - 1];
+  const input = h('input', { name: 'name', type: 'text', value: oldName, required: true, maxlength: 60 });
+  const res = await openDialog({ title: 'ノートブック名を変更', fields: [h('label', { class: 'field' }, h('span', {}, '新しい名前'), input)], ok: '変更' });
+  if (!res) return;
+  const newName = safeName(String(res.data.get('name') || '').trim(), 60);
+  if (!newName || newName === oldName) { res.close(); return; }
+  await runAction(res, '変更中…', async () => {
+    const mdParent = S.parents.get(folderId);
+    if (await findChild(mdParent, newName, { folder: true })) throw new Error(`「${newName}」というノートブックは既にあります`);
+    const attFolder = await resolveFolderPath(S.root.attId, parts);
+    let attParent = null;
+    if (attFolder) {
+      attParent = await resolveFolderPath(S.root.attId, parts.slice(0, -1));
+      if (await findChild(attParent, newName, { folder: true })) throw new Error(`添付フォルダに「${newName}」が既にあるため変更できません`);
+    }
+    await patchFile(folderId, { name: newName });
+    if (attFolder) await patchFile(attFolder, { name: newName });
+    resetCaches();
+    toast('ノートブック名を変更しました');
+    route();
+  });
 }
 
 /* ------------------------------------------------------------ ルーター */
