@@ -750,6 +750,40 @@ async function notebookOptions() {
   return opts;
 }
 
+/* 共有（Android の共有メニュー／iPhone のショートカット）から受け取った内容 */
+const SHARE_CACHE = 'drivenotes-share';
+async function readShared() {
+  try {
+    const c = await caches.open(SHARE_CACHE);
+    const m = await c.match(new URL('share/meta', document.baseURI).href);
+    if (!m) return null;
+    const meta = await m.json();
+    const files = [];
+    for (let i = 0; i < meta.count; i++) {
+      const r = await c.match(new URL(`share/file/${i}`, document.baseURI).href);
+      if (!r) continue;
+      const b = await r.blob();
+      files.push(new File([b], decodeURIComponent(r.headers.get('x-file-name') || `file${i + 1}`), { type: b.type || r.headers.get('content-type') || '' }));
+    }
+    return { ...meta, files };
+  } catch {
+    return null;
+  }
+}
+async function clearShared() { try { await caches.delete(SHARE_CACHE); } catch {} }
+function normalizeShared(sh) {
+  let { title = '', text = '', url = '' } = sh;
+  text = String(text).trim();
+  if (!url) {
+    const m = text.match(/https?:\/\/\S+/);
+    if (m) { url = m[0]; text = text.replace(m[0], '').trim(); }
+  }
+  if (!/^https?:\/\//i.test(url)) url = '';
+  if (!title && text) title = text.split(/\r?\n/)[0].slice(0, 60);
+  if (!title && url) { try { title = new URL(url).hostname; } catch {} }
+  return { title: String(title).trim(), text, url, files: sh.files || [] };
+}
+
 const DRAFT_KEY = 'dn_draft';
 function readDraft() { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}'); } catch { return {}; } }
 function writeDraft(d) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch {} }
@@ -772,9 +806,18 @@ async function viewNew(nav, params) {
   loadingView('ノートブックを準備中…');
   const opts = await notebookOptions();
   if (nav !== S.nav) return;
-  const draft = readDraft();
+  let shared = null;
+  if (params.get('shared') === '1') shared = await readShared();
+  else if (params.get('url') || params.get('text') || params.get('title')) {
+    shared = { title: params.get('title') || '', text: params.get('text') || '', url: params.get('url') || '', files: [] };
+  }
+  if (shared) shared = normalizeShared(shared);
+  if (nav !== S.nav) return;
+  const savedDraft = readDraft();
+  const draft = shared ? { nb: savedDraft.nb, resize: savedDraft.resize, title: shared.title, body: [shared.text, shared.url ? `[元のページ](${shared.url})` : ''].filter(Boolean).join('\n\n') } : savedDraft;
   const preferred = params.get('nb') || draft.nb || localStorage.getItem('dn_last_nb');
   const files = [];
+  const sourceUrl = shared?.url || '';
 
   const select = h('select', { name: 'nb', required: true },
     opts.map((o) => h('option', { value: o.id, selected: o.id === preferred }, o.label)),
@@ -827,7 +870,8 @@ async function viewNew(nav, params) {
         if (!newNb.value.trim()) throw new Error('新しいノートブック名を入力してください');
         opt = { id: null, label: name, parts: [name] };
       }
-      const saved = await saveNote({ opt, title: title.value.trim(), body: body.value, tags: tags.value, files, resize: resize.checked, onProgress: setProgress });
+      const saved = await saveNote({ opt, title: title.value.trim(), body: body.value, tags: tags.value, files, resize: resize.checked, onProgress: setProgress, sourceUrl });
+      clearShared();
       files.forEach((f) => URL.revokeObjectURL(f._url));
       localStorage.removeItem(DRAFT_KEY);
       localStorage.setItem('dn_last_nb', saved.notebookId);
@@ -859,11 +903,16 @@ async function viewNew(nav, params) {
   form.addEventListener('drop', (e) => { e.preventDefault(); form.classList.remove('drop'); addFiles(e.dataTransfer.files); });
   form.addEventListener('paste', (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } });
 
-  setMain(h('section', { class: 'page' }, h('h1', { class: 'page-title' }, '新しいノート'), form));
+  if (shared?.files.length) addFiles(shared.files);
+  setMain(h('section', { class: 'page' },
+    h('h1', { class: 'page-title' }, '新しいノート'),
+    shared ? h('p', { class: 'shared-note' }, '共有された内容を読み込みました。ノートブックを選んで「保存」してください。') : null,
+    params.get('shared') === 'error' ? h('p', { class: 'shared-note' }, '共有された内容を受け取れませんでした。もう一度共有してください。') : null,
+    form));
   if (!draft.title && !draft.body) title.focus({ preventScroll: true });
 }
 
-async function saveNote({ opt, title, body, tags, files, resize, onProgress }) {
+async function saveNote({ opt, title, body, tags, files, resize, onProgress, sourceUrl }) {
   const now = new Date();
   const parts = opt.parts;
   onProgress(0, '保存先を準備しています…');
@@ -895,8 +944,9 @@ async function saveNote({ opt, title, body, tags, files, resize, onProgress }) {
     `created: ${JSON.stringify(iso)}`,
     `updated: ${JSON.stringify(iso)}`,
     `tags: ${JSON.stringify(tagList)}`,
+    sourceUrl ? `source_url: ${JSON.stringify(sourceUrl)}` : null,
     'source: "DriveNotes"',
-    '---', ''].join('\n');
+    '---', ''].filter((l) => l != null).join('\n');
   const md = fm + body.trim() + (links.length ? (body.trim() ? '\n\n' : '') + links.join('\n\n') : '') + '\n';
   let name = `${stamp(now)}_${safeName(title || '無題')}.md`;
   if (await findChild(nbId, name)) name = name.replace(/\.md$/, `_${ts.slice(8)}.md`);
@@ -1291,6 +1341,6 @@ window.addEventListener('hashchange', route);
 
 loadToken();
 route();
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

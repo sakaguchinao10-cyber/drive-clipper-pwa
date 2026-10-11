@@ -310,3 +310,4 @@ main { flex: 1; min-width: 0; outline: none; }
 .import-list { margin-top: 12px; }
 .row-sub.ok { color: var(--accent); }
 .row-sub.ng { color: var(--danger); white-space: normal; }
+.shared-note { background: var(--accent-soft); color: var(--text); padding: 10px 14px; border-radius: 8px; font-size: 14px; margin: 0 0 14px; }
