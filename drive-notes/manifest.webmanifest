@@ -1,0 +1,16 @@
+{
+  "name": "DriveNotes ドライブノート",
+  "short_name": "DriveNotes",
+  "description": "Google Drive のノート（Evernote バックアップ・WebClips）の閲覧と登録",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f5f1",
+  "theme_color": "#1f5f57",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
