@@ -18,6 +18,6 @@ window.DRIVENOTES_CONFIG = {
 
   // Drive からの取り込み（Google Picker）用
   // pickerApiKey は Google Cloud で作成した API キー（ウェブサイト制限: sakaguchinao10-cyber.github.io）
-  pickerApiKey: '',
+  pickerApiKey: 'AIzaSyAvoLmWiaMHnOf6xm_N6Kxhn_7qSfaPCzA',
   appId: '548818324610', // DriveClippers のプロジェクト番号
 };
